@@ -1,4 +1,4 @@
-<!-- ふたりのカレンダー v1.2 -->
+<!-- ふたりのカレンダー v1.3 -->
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -778,8 +778,14 @@
       <input type="text" id="shareCodeInput" placeholder="共有コードを貼り付け" autocomplete="off" autocapitalize="off">
     </div>
 
-    <input type="text" id="whoamiInput" placeholder="" style="margin-bottom:14px;">
-    <input type="text" id="partnerNameInput" placeholder="" style="margin-bottom:14px;">
+    <div class="field">
+      <label>あなたの名前</label>
+      <input type="text" id="whoamiInput" placeholder="" style="margin-bottom:14px;">
+    </div>
+    <div class="field">
+      <label>パートナーの名前</label>
+      <input type="text" id="partnerNameInput" placeholder="" style="margin-bottom:14px;">
+    </div>
     <p class="modal-error" id="whoamiError" style="margin:0 0 10px; color:#c0644f; font-size:12px;"></p>
     <button id="whoamiSaveBtn">はじめる</button>
   </div>
