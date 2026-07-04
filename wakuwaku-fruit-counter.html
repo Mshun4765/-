@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="わくわくの実" />
+<meta name="theme-color" content="#0f172a" />
+<title>わくわくの実カウンター</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #0f172a;
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #root {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+
+// ==== データ定義(設計図v3準拠:32種類・4グループ・3グレード固定) ====
+const GROUPS = ["同族", "撃種", "戦型", "その他"];
+
+const FRUITS = [
+  { id: "atsuki_yugeki", name: "熱き友撃の力", group: "その他" },
+  { id: "kega_beri", name: "ケガ減りの力", group: "その他" },
+  { id: "ichigeki_shisshin", name: "一撃失心の力", group: "その他" },
+  { id: "soku_hissatsu", name: "速必殺の力", group: "その他" },
+  { id: "doku_gaman", name: "毒がまんの力", group: "その他" },
+  { id: "chibi_iyashi", name: "ちび癒しの力", group: "その他" },
+  { id: "shoumei_kezuri", name: "将命削りの力", group: "その他" },
+  { id: "heimei_kezuri", name: "兵命削りの力", group: "その他" },
+  { id: "dozoku_kageki", name: "同族の絆・加撃", group: "同族" },
+  { id: "dozoku_kasoku", name: "同族の絆・加速", group: "同族" },
+  { id: "dozoku_kamei", name: "同族の絆・加命", group: "同族" },
+  { id: "dozoku_kagekisoku", name: "同族の絆・加撃速", group: "同族" },
+  { id: "dozoku_kasokumei", name: "同族の絆・加速命", group: "同族" },
+  { id: "dozoku_kameigeki", name: "同族の絆・加命撃", group: "同族" },
+  { id: "gekishu_kageki", name: "撃種の絆・加撃", group: "撃種" },
+  { id: "gekishu_kasoku", name: "撃種の絆・加速", group: "撃種" },
+  { id: "gekishu_kamei", name: "撃種の絆・加命", group: "撃種" },
+  { id: "gekishu_kagekisoku", name: "撃種の絆・加撃速", group: "撃種" },
+  { id: "gekishu_kasokumei", name: "撃種の絆・加速命", group: "撃種" },
+  { id: "gekishu_kameigeki", name: "撃種の絆・加命撃", group: "撃種" },
+  { id: "sentai_kageki", name: "戦型の絆・加撃", group: "戦型" },
+  { id: "sentai_kasoku", name: "戦型の絆・加速", group: "戦型" },
+  { id: "sentai_kamei", name: "戦型の絆・加命", group: "戦型" },
+  { id: "sentai_kagekisoku", name: "戦型の絆・加撃速", group: "戦型" },
+  { id: "sentai_kasokumei", name: "戦型の絆・加速命", group: "戦型" },
+  { id: "sentai_kameigeki", name: "戦型の絆・加命撃", group: "戦型" },
+  { id: "manabi", name: "学び", group: "その他" },
+  { id: "supikuri", name: "スピクリ", group: "その他" },
+  { id: "arakasegi", name: "荒稼ぎ", group: "その他" },
+  { id: "s_rank", name: "Sランク", group: "その他" },
+  { id: "score_kasegi", name: "スコア稼ぎ", group: "その他" },
+  { id: "heart_kyoka", name: "ハート強化", group: "その他" },
+];
+
+const FRUITS_WITH_ORDER = FRUITS.map((f, i) => ({ ...f, order: i }));
+
+const GRADES = [
+  { key: "tokkyu_m", label: "特級M" },
+  { key: "tokkyu_l", label: "特級L" },
+  { key: "tokkyu_el", label: "特級EL" },
+];
+
+const STORAGE_KEY = "wakuwaku-fruit-counter:v1";
+const ORDER_STORAGE_KEY = "wakuwaku-fruit-counter:customOrder:v1";
+const LONG_PRESS_MS = 320;
+const MOVE_CANCEL_PX = 10;
+
+function loadCounts() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch (e) {
+    return {};
+  }
+}
+
+function loadCustomOrder() {
+  const defaultOrder = FRUITS.map((f) => f.id);
+  try {
+    const raw = localStorage.getItem(ORDER_STORAGE_KEY);
+    if (!raw) return defaultOrder;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return defaultOrder;
+    const validIds = new Set(defaultOrder);
+    const filtered = parsed.filter((id) => validIds.has(id));
+    const missing = defaultOrder.filter((id) => !filtered.includes(id));
+    return [...filtered, ...missing];
+  } catch (e) {
+    return defaultOrder;
+  }
+}
+
+function makeKey(fruitId, gradeKey) {
+  return fruitId + "__" + gradeKey;
+}
+
+function WakuwakuFruitCounter() {
+  const [counts, setCounts] = useState(() => loadCounts());
+  const [activeGroup, setActiveGroup] = useState("すべて");
+  const [search, setSearch] = useState("");
+  const [sortMode, setSortMode] = useState("name");
+  const [customOrder, setCustomOrder] = useState(() => loadCustomOrder());
+  const [draggingId, setDraggingId] = useState(null);
+  const [dragOffsetY, setDragOffsetY] = useState(0);
+  const [hoverIndex, setHoverIndex] = useState(null);
+  const [confirmAllReset, setConfirmAllReset] = useState(false);
+  const [confirmRowReset, setConfirmRowReset] = useState(null);
+
+  const rowRefs = useRef({});
+  const pressTimerRef = useRef(null);
+  const pointerInfoRef = useRef(null);
+  const dragStartIndexRef = useRef(null);
+  const rowPitchRef = useRef(60);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(counts));
+    } catch (e) {}
+  }, [counts]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(customOrder));
+    } catch (e) {}
+  }, [customOrder]);
+
+  const customIndexMap = useMemo(() => {
+    const map = {};
+    customOrder.forEach((id, i) => {
+      map[id] = i;
+    });
+    return map;
+  }, [customOrder]);
+
+  function getCount(fruitId, gradeKey) {
+    return counts[makeKey(fruitId, gradeKey)] || 0;
+  }
+
+  function rowTotalRaw(fruitId) {
+    return GRADES.reduce((sum, g) => sum + getCount(fruitId, g.key), 0);
+  }
+
+  const filteredFruits = useMemo(() => {
+    const base = FRUITS_WITH_ORDER.filter((f) => {
+      const groupOk = activeGroup === "すべて" || f.group === activeGroup;
+      const searchOk = search.trim() === "" || f.name.includes(search.trim());
+      return groupOk && searchOk;
+    });
+
+    const sorted = [...base];
+    if (sortMode === "count") {
+      sorted.sort((a, b) => {
+        const diff = rowTotalRaw(b.id) - rowTotalRaw(a.id);
+        if (diff !== 0) return diff;
+        return a.order - b.order;
+      });
+    } else if (sortMode === "custom") {
+      sorted.sort((a, b) => {
+        const ai = customIndexMap[a.id] !== undefined ? customIndexMap[a.id] : a.order;
+        const bi = customIndexMap[b.id] !== undefined ? customIndexMap[b.id] : b.order;
+        return ai - bi;
+      });
+    } else {
+      sorted.sort((a, b) => a.order - b.order);
+    }
+    return sorted;
+  }, [activeGroup, search, sortMode, counts, customIndexMap]);
+
+  const canReorder =
+    sortMode === "custom" && activeGroup === "すべて" && search.trim() === "";
+
+  function clearPressTimer() {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  }
+
+  function handleHandlePointerDown(e, id) {
+    if (!canReorder) return;
+    if (e.target.closest && e.target.closest("button")) return;
+    pointerInfoRef.current = {
+      id,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+    };
+    clearPressTimer();
+    const target = e.currentTarget;
+    pressTimerRef.current = setTimeout(() => {
+      const startIndex = filteredFruits.findIndex((f) => f.id === id);
+      dragStartIndexRef.current = startIndex;
+
+      const ids = filteredFruits.map((f) => f.id);
+      const firstNode = rowRefs.current[ids[0]];
+      const secondNode = ids.length > 1 ? rowRefs.current[ids[1]] : null;
+      const draggedNode = rowRefs.current[id];
+      let pitch = 60;
+      if (firstNode && secondNode) {
+        pitch =
+          secondNode.getBoundingClientRect().top -
+          firstNode.getBoundingClientRect().top;
+      } else if (draggedNode) {
+        pitch = draggedNode.getBoundingClientRect().height + 8;
+      }
+      rowPitchRef.current = pitch || 60;
+
+      setDraggingId(id);
+      setDragOffsetY(0);
+      setHoverIndex(startIndex);
+      try {
+        target.setPointerCapture(pointerInfoRef.current.pointerId);
+      } catch (err) {}
+    }, LONG_PRESS_MS);
+  }
+
+  function handleHandlePointerMove(e) {
+    if (!pointerInfoRef.current) return;
+    if (!draggingId) {
+      const dx = Math.abs(e.clientX - pointerInfoRef.current.startX);
+      const dy = Math.abs(e.clientY - pointerInfoRef.current.startY);
+      if (dx > MOVE_CANCEL_PX || dy > MOVE_CANCEL_PX) {
+        clearPressTimer();
+        pointerInfoRef.current = null;
+      }
+      return;
+    }
+    const deltaY = e.clientY - pointerInfoRef.current.startY;
+    setDragOffsetY(deltaY);
+
+    const pitch = rowPitchRef.current || 60;
+    const startIndex = dragStartIndexRef.current || 0;
+    const rawIndex = startIndex + Math.round(deltaY / pitch);
+    const clamped = Math.max(0, Math.min(filteredFruits.length - 1, rawIndex));
+    setHoverIndex((prev) => (prev === clamped ? prev : clamped));
+  }
+
+  function handleHandlePointerUp() {
+    clearPressTimer();
+    pointerInfoRef.current = null;
+    if (draggingId) {
+      const startIndex = dragStartIndexRef.current;
+      const endIndex = hoverIndex !== null ? hoverIndex : startIndex;
+      if (startIndex !== null && startIndex !== endIndex) {
+        const draggedId = draggingId;
+        setCustomOrder((prev) => {
+          const arr = [...prev];
+          const fromIdx = arr.indexOf(draggedId);
+          if (fromIdx === -1) return prev;
+          arr.splice(fromIdx, 1);
+          arr.splice(endIndex, 0, draggedId);
+          return arr;
+        });
+      }
+      setDraggingId(null);
+      setDragOffsetY(0);
+      setHoverIndex(null);
+      dragStartIndexRef.current = null;
+    }
+  }
+
+  function changeCount(fruitId, gradeKey, delta) {
+    setCounts((prev) => {
+      const key = makeKey(fruitId, gradeKey);
+      const next = Math.max(0, (prev[key] || 0) + delta);
+      return { ...prev, [key]: next };
+    });
+  }
+
+  function rowTotal(fruitId) {
+    return GRADES.reduce((sum, g) => sum + getCount(fruitId, g.key), 0);
+  }
+
+  function resetRow(fruitId) {
+    setCounts((prev) => {
+      const next = { ...prev };
+      GRADES.forEach((g) => {
+        delete next[makeKey(fruitId, g.key)];
+      });
+      return next;
+    });
+    setConfirmRowReset(null);
+  }
+
+  function resetAll() {
+    setCounts({});
+    setConfirmAllReset(false);
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-slate-950 via-indigo-950 to-slate-900 text-slate-100 font-sans pb-10">
+      <div className="sticky top-0 z-20 bg-slate-900 border-b-2 border-amber-500 shadow-lg">
+        <div className="px-4 py-3 flex items-center gap-2">
+          <span className="text-amber-400 text-lg">★</span>
+          <h1 className="text-base font-bold tracking-wide text-amber-300">わくわくの実</h1>
+        </div>
+
+        <div className="flex gap-1.5 overflow-x-auto px-3 pb-3">
+          {["すべて", ...GROUPS].map((g) => (
+            <button
+              key={g}
+              onClick={() => setActiveGroup(g)}
+              className={
+                "shrink-0 px-3 py-1.5 rounded-full text-xs font-bold border transition-colors " +
+                (activeGroup === g
+                  ? "bg-amber-400 text-slate-900 border-amber-300"
+                  : "bg-slate-800 text-slate-300 border-slate-600")
+              }
+            >
+              {g}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="px-4 mt-3">
+        <div className="relative">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="実の名前で検索..."
+            className="w-full rounded-lg border border-slate-600 bg-slate-800 text-slate-100 placeholder-slate-400 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-sm px-1"
+            >
+              ×
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="px-4 mt-3 flex items-center justify-between gap-2">
+        <span className="text-xs text-slate-400 shrink-0">
+          {filteredFruits.length} / {FRUITS.length} 種類
+        </span>
+
+        <div className="flex items-center gap-1.5">
+          <div className="flex bg-slate-800 border border-slate-600 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setSortMode("name")}
+              className={
+                "text-xs font-bold px-2.5 py-1 " +
+                (sortMode === "name" ? "bg-amber-400 text-slate-900" : "text-slate-300")
+              }
+            >
+              名前順
+            </button>
+            <button
+              onClick={() => setSortMode("count")}
+              className={
+                "text-xs font-bold px-2.5 py-1 " +
+                (sortMode === "count" ? "bg-amber-400 text-slate-900" : "text-slate-300")
+              }
+            >
+              総個数順
+            </button>
+            <button
+              onClick={() => setSortMode("custom")}
+              className={
+                "text-xs font-bold px-2.5 py-1 " +
+                (sortMode === "custom" ? "bg-amber-400 text-slate-900" : "text-slate-300")
+              }
+            >
+              カスタム順
+            </button>
+          </div>
+
+          <button
+            onClick={() => setConfirmAllReset(true)}
+            className="text-xs font-bold text-red-300 border border-red-500 bg-slate-800 rounded-lg px-2.5 py-1 shrink-0"
+          >
+            全体リセット
+          </button>
+        </div>
+      </div>
+
+      {sortMode === "custom" && (
+        <div className="px-4 mt-1.5">
+          <p className="text-[11px] text-amber-300">
+            {canReorder
+              ? "行のどこでも長押しすると並び替えできます"
+              : "並び替えは「すべて」表示・検索なしの状態でのみ使用できます"}
+          </p>
+        </div>
+      )}
+
+      <div className="px-3 mt-2 space-y-2">
+        {filteredFruits.length === 0 && (
+          <div className="text-center text-sm text-slate-400 py-10">該当する実が見つかりません</div>
+        )}
+
+        {filteredFruits.map((fruit, i) => {
+          const has = rowTotal(fruit.id) > 0;
+          const isDragging = draggingId === fruit.id;
+
+          let transformY = 0;
+          let transitionStyle = "transform 150ms ease";
+          if (isDragging) {
+            transformY = dragOffsetY;
+            transitionStyle = "none";
+          } else if (draggingId && hoverIndex !== null) {
+            const startIndex = dragStartIndexRef.current;
+            if (hoverIndex > startIndex && i > startIndex && i <= hoverIndex) {
+              transformY = -rowPitchRef.current;
+            } else if (hoverIndex < startIndex && i >= hoverIndex && i < startIndex) {
+              transformY = rowPitchRef.current;
+            }
+          }
+
+          return (
+            <div
+              key={fruit.id}
+              ref={(el) => {
+                rowRefs.current[fruit.id] = el;
+              }}
+              onPointerDown={(e) => handleHandlePointerDown(e, fruit.id)}
+              onPointerMove={handleHandlePointerMove}
+              onPointerUp={handleHandlePointerUp}
+              onPointerCancel={handleHandlePointerUp}
+              style={{
+                transform: "translateY(" + transformY + "px)",
+                transition: transitionStyle,
+                position: "relative",
+                zIndex: isDragging ? 20 : 1,
+                touchAction: canReorder ? "none" : "auto",
+              }}
+              className={
+                "rounded-lg border-l-4 border p-2.5 " +
+                (isDragging
+                  ? "bg-slate-700 border-l-amber-400 border-amber-400 shadow-xl scale-[1.02]"
+                  : has
+                  ? "bg-amber-950 border-l-amber-400 border-amber-600 shadow"
+                  : "bg-slate-800 border-l-slate-500 border-slate-700 shadow")
+              }
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm font-bold leading-tight text-slate-100 truncate">
+                    {fruit.name}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setConfirmRowReset(fruit.id)}
+                  className="text-[11px] text-slate-400 px-1.5 py-0.5 shrink-0"
+                >
+                  リセット
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1.5">
+                {GRADES.map((g) => {
+                  const c = getCount(fruit.id, g.key);
+                  return (
+                    <div
+                      key={g.key}
+                      className="flex flex-col items-center bg-slate-900 border border-slate-700 rounded-md py-1.5 px-0.5"
+                    >
+                      <span className="text-[10px] font-bold text-amber-300 mb-1">{g.label}</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => changeCount(fruit.id, g.key, -1)}
+                          className="w-7 h-7 flex items-center justify-center rounded-full bg-slate-600 text-white font-extrabold text-base leading-none"
+                        >
+                          -
+                        </button>
+                        <span className="w-5 text-center text-sm font-extrabold text-white">{c}</span>
+                        <button
+                          onClick={() => changeCount(fruit.id, g.key, 1)}
+                          className="w-7 h-7 flex items-center justify-center rounded-full bg-amber-400 text-slate-900 font-extrabold text-base leading-none"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {confirmRowReset && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-30 px-6">
+          <div className="bg-slate-800 border border-slate-600 rounded-xl p-5 w-full max-w-xs shadow-lg">
+            <p className="text-sm font-bold mb-1 text-amber-300">
+              {FRUITS.find((f) => f.id === confirmRowReset) && FRUITS.find((f) => f.id === confirmRowReset).name}
+            </p>
+            <p className="text-sm text-slate-300 mb-4">この実の所持数(3グレードすべて)を0に戻します。よろしいですか?</p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setConfirmRowReset(null)}
+                className="text-sm px-3 py-1.5 rounded-lg border border-slate-500 text-slate-300"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => resetRow(confirmRowReset)}
+                className="text-sm px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold"
+              >
+                リセットする
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmAllReset && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-30 px-6">
+          <div className="bg-slate-800 border border-slate-600 rounded-xl p-5 w-full max-w-xs shadow-lg">
+            <p className="text-sm font-bold mb-1 text-amber-300">全体リセット</p>
+            <p className="text-sm text-slate-300 mb-4">32種類・全96通りの所持数をすべて0に戻します。この操作は元に戻せません。</p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setConfirmAllReset(false)}
+                className="text-sm px-3 py-1.5 rounded-lg border border-slate-500 text-slate-300"
+              >
+                キャンセル
+              </button>
+              <button onClick={resetAll} className="text-sm px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold">
+                全てリセット
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<WakuwakuFruitCounter />);
+</script>
+</body>
+</html>
