@@ -1,4 +1,4 @@
-<!-- ふたりのカレンダー v2.6 -->
+<!-- ふたりのカレンダー v2.7 -->
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -380,10 +380,18 @@
   }
   .timetable-empty { font-size: 16px; color: #c9bfae; }
 
+  /* ===== キーボード対応 =====
+     iPhoneはキーボードが出ても「レイアウト上の画面」の大きさが変わらず、シートがキーボードの裏に隠れる。
+     そこでキーボード表示中だけ、JS(updateKeyboardInset)が実際に見えている範囲の位置と高さを
+     --vv-top / --vv-height に入れ、シートやダイアログをその範囲の中に収める。
+     キーボードが出ていない時は変数を設定しないので、従来どおり(inset:0相当)の表示になる。 */
   .sheet-overlay {
     display: none;
     position: fixed;
-    inset: 0;
+    left: 0;
+    right: 0;
+    top: var(--vv-top, 0px);
+    height: var(--vv-height, 100%);
     background: rgba(74,68,56,0.35);
     z-index: 30;
     align-items: flex-end;
@@ -546,7 +554,10 @@
   .whoami-overlay {
     display: none;
     position: fixed;
-    inset: 0;
+    left: 0;
+    right: 0;
+    top: var(--vv-top, 0px);
+    height: var(--vv-height, 100%);
     background: rgba(74,68,56,0.35);
     z-index: 40;
     align-items: center;
@@ -785,6 +796,25 @@
     #eventSheetOverlay .owner-toggle-btn { padding: 5px; }
     #eventSheetOverlay .color-swatch { width: 24px; height: 24px; }
     #eventSheetOverlay .sheet-actions button { padding: 8px; }
+  }
+
+  /* ===== キーボード表示中（html.kb-open）の上書き =====
+     シートは「実際に見えている範囲」の中に収め、下端はキーボードのすぐ上に置く。
+     キーボードがホームバー領域まで覆っているので、safe-area分の余白は不要。 */
+  html.kb-open .sheet {
+    max-height: calc(var(--vv-height) - 8px);
+    padding-bottom: 14px;
+  }
+  html.kb-open #eventSheetOverlay .sheet {
+    max-height: calc(var(--vv-height) - 8px);
+    padding-bottom: 10px;
+  }
+  html.kb-open .whoami-box {
+    max-height: calc(var(--vv-height) - 16px);
+  }
+  html.kb-open .whoami-overlay {
+    padding-top: 8px;
+    padding-bottom: 8px;
   }
 </style>
 </head>
@@ -2567,20 +2597,64 @@ document.addEventListener('gesturestart', (e) => e.preventDefault());
 // ===== キーボード表示後に画面がずれたままになるのを直す =====
 // 予定の入力欄にフォーカスするとiPhoneは画面全体を上にずらし、キーボードを閉じても
 // 元に戻らないことがある。ずれを検知したらその都度、先頭位置(0,0)に戻す。
+// ただし、文字入力中（キーボード表示中）に戻してしまうと入力欄の位置調整と喧嘩して
+// 画面が揺れるため、入力欄にフォーカスがある間は何もしない。
+function isTextEntryFocused() {
+  const ae = document.activeElement;
+  return !!(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName));
+}
 function resetViewportScroll() {
+  if (isTextEntryFocused()) return;
   if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0);
   if (document.scrollingElement && document.scrollingElement.scrollTop !== 0) document.scrollingElement.scrollTop = 0;
   document.body.scrollTop = 0;
   document.documentElement.scrollTop = 0;
 }
 window.addEventListener('scroll', resetViewportScroll, { passive: true });
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', resetViewportScroll);
-  window.visualViewport.addEventListener('scroll', resetViewportScroll);
+
+// ===== キーボードをよける =====
+// iPhoneはキーボードが出ても「レイアウト上の画面」の大きさが変わらないため、画面下に置いた
+// シートがキーボードの裏に隠れてしまう。visualViewport（実際に見えている範囲）の位置と高さを
+// CSS変数 --vv-top / --vv-height に入れ、シート・ダイアログをその範囲の中に収める。
+// キーボードが出ていない時は変数を消して、従来どおりの表示に戻す。
+function updateKeyboardInset() {
+  const vv = window.visualViewport;
+  const root = document.documentElement;
+  if (!vv) return;
+  const hidden = window.innerHeight - vv.height; // キーボード等で隠れている高さの目安
+  if (hidden > 100) {
+    root.style.setProperty('--vv-top', vv.offsetTop + 'px');
+    root.style.setProperty('--vv-height', vv.height + 'px');
+    root.classList.add('kb-open');
+  } else {
+    root.style.removeProperty('--vv-top');
+    root.style.removeProperty('--vv-height');
+    root.classList.remove('kb-open');
+  }
 }
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', updateKeyboardInset);
+  window.visualViewport.addEventListener('scroll', updateKeyboardInset);
+}
+window.addEventListener('resize', updateKeyboardInset);
+
+// 入力欄をタップしたら、キーボードが出て寸法が落ち着いたあとで、その入力欄がシートの見える範囲の
+// 真ん中あたりに来るようにスクロールする（メモ欄など下の方の入力欄が隠れないように）
+document.addEventListener('focusin', (e) => {
+  const el = e.target;
+  if (!el || !el.matches || !el.matches('input, textarea')) return;
+  if (el.matches('input[type="date"], input[type="time"], input[type="checkbox"]')) return;
+  if (!el.closest('.sheet, .whoami-box')) return;
+  [60, 350].forEach(ms => setTimeout(() => {
+    if (document.activeElement !== el) return;
+    updateKeyboardInset();
+    try { el.scrollIntoView({ block: 'center', behavior: 'auto' }); } catch (err) {}
+  }, ms));
+});
+
 document.addEventListener('focusout', () => {
   // キーボードが閉じ終わるタイミングに合わせて、数回戻す
-  [0, 100, 300, 600].forEach(ms => setTimeout(resetViewportScroll, ms));
+  [0, 100, 300, 600].forEach(ms => setTimeout(() => { updateKeyboardInset(); resetViewportScroll(); }, ms));
 });
 
 // ===== スワイプで月送り =====
