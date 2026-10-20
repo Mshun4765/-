@@ -1,4 +1,4 @@
-<!-- ふたりのカレンダー v2.5 -->
+<!-- ふたりのカレンダー v2.6 -->
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -320,6 +320,13 @@
   }
   .fab-secondary:active { background: var(--lavender); }
 
+  /* 時間割シート内の「自分／パートナー」切り替え（カレンダーのタブと同じ見た目） */
+  .tt-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
   .timetable-grid {
     display: grid;
     grid-template-columns: 26px repeat(5, 1fr);
@@ -356,6 +363,9 @@
     gap: 2px;
   }
   .timetable-cell:active { background: var(--pink); }
+  /* パートナーの時間割は閲覧専用（タップしても何も起きない） */
+  .timetable-cell.readonly { cursor: default; }
+  .timetable-cell.readonly:active { background: #fff; }
   .timetable-subject {
     font-size: 12px;
     font-weight: 700;
@@ -809,12 +819,16 @@
 <button class="fab" id="addFab">＋</button>
 <button class="fab-secondary" id="timetableFab" title="時間割">📚</button>
 
-<!-- 時間割 -->
+<!-- 時間割（自分／パートナーを切り替えて見られる） -->
 <div class="sheet-overlay" id="timetableOverlay">
   <div class="sheet">
     <h2>時間割</h2>
+    <div class="tt-tabs">
+      <button class="person-tab selected" id="ttTabMine" data-who="mine">自分</button>
+      <button class="person-tab" id="ttTabPartner" data-who="partner">パートナー</button>
+    </div>
     <div class="timetable-grid" id="timetableGrid"></div>
-    <button id="timetableResetBtn" style="background:#fff; color:#c0644f; border:1px solid #e8c9c0; font-size:12px; margin-top:4px;">⚠️ 時間割だけリセット</button>
+    <button id="timetableResetBtn" style="background:#fff; color:#c0644f; border:1px solid #e8c9c0; font-size:12px; margin-top:4px;">⚠️ 自分の時間割をリセット</button>
     <div class="sheet-actions" style="margin-top:18px;">
       <button class="btn-cancel" id="timetableCloseBtn">閉じる</button>
     </div>
@@ -1441,7 +1455,11 @@ function repeatLabel(ev) {
 let partnerEvents = [];
 let sharedEvents = [];
 
-// Bin全体のデータ構造: { members: { "名前": [...events] }, shared: [...events], timetable: {...} }
+// Bin全体のデータ構造:
+// { members: { "名前": [...events] }, shared: [...events],
+//   timetables: { "名前": {slot: {...}} },   ← v2.6〜 自分とパートナーで別々の時間割
+//   timetable: {...} }                        ← v2.5以前の共有時間割（移行用に残す。書き換えない）
+// 保存時は record 全体を引き継いで、自分の担当部分だけ差し替える（他の項目を消さないため）。
 async function loadAllEventLists() {
   try {
     const record = await jsonbinRead(pairCode);
@@ -1463,7 +1481,7 @@ async function saveMyEvents() {
     const record = await jsonbinRead(pairCode);
     const members = record.members || {};
     members[myName] = events;
-    await jsonbinUpdate(pairCode, { members, shared: record.shared || [], timetable: record.timetable || {} });
+    await jsonbinUpdate(pairCode, { ...record, members, shared: record.shared || [] });
     statusEl.textContent = '保存しました（パートナーと共有されます）';
     setTimeout(() => { statusEl.textContent = ''; }, 2000);
   } catch (e) {
@@ -1476,7 +1494,7 @@ async function saveSharedEvents() {
   try {
     const record = await jsonbinRead(pairCode);
     const members = record.members || {};
-    await jsonbinUpdate(pairCode, { members, shared: sharedEvents, timetable: record.timetable || {} });
+    await jsonbinUpdate(pairCode, { ...record, members, shared: sharedEvents });
     statusEl.textContent = '保存しました（共有の予定としてふたりに反映されます）';
     setTimeout(() => { statusEl.textContent = ''; }, 2000);
   } catch (e) {
@@ -1517,7 +1535,9 @@ async function refreshFromServer() {
 
 // ===== ふたりタブの切り替え =====
 function updatePersonTabLabels() {
-  document.getElementById('personTabPartner').textContent = partnerName || 'パートナー';
+  const label = partnerName || 'パートナー';
+  document.getElementById('personTabPartner').textContent = label;
+  document.getElementById('ttTabPartner').textContent = label;
 }
 
 function switchPersonTab(who) {
@@ -2163,7 +2183,7 @@ async function saveWhoami() {
   try {
     if (whoamiMode === 'create') {
       // 新しい共有スペースを作成
-      const newBinId = await jsonbinCreate({ members: {}, shared: [], timetable: {} });
+      const newBinId = await jsonbinCreate({ members: {}, shared: [], timetable: {}, timetables: {} });
       pairCode = newBinId;
       myName = name;
       partnerName = partner;
@@ -2240,8 +2260,9 @@ async function saveRevealName() {
 async function resetAllData() {
   if (!confirm('本当に全データを削除しますか？この操作は取り消せません。')) return;
   try {
-    await jsonbinUpdate(pairCode, { members: {}, shared: [], timetable: {} });
-    events = []; partnerEvents = []; sharedEvents = []; timetableData = {};
+    await jsonbinUpdate(pairCode, { members: {}, shared: [], timetable: {}, timetables: {} });
+    events = []; partnerEvents = []; sharedEvents = [];
+    timetableData = {}; partnerTimetableData = {};
     renderCalendar();
     document.getElementById('shareCodeRevealOverlay').classList.remove('open');
     alert('データをリセットしました');
@@ -2250,8 +2271,13 @@ async function resetAllData() {
   }
 }
 
-// ===== 学校の時間割（ふたり共有。JSONBinに保存し、ふたりの端末で同じ内容を見る） =====
-// 旧バージョン（端末内のみ保存）からの移行用キー。初回のみ読み取り、以後は使用しない。
+// ===== 学校の時間割（自分とパートナーで別々。JSONBinに保存し、ふたりの端末で見られる） =====
+// 保存先: record.timetables[名前] = { 'mon-1': {subject, teacher, room}, ... }
+// 自分の時間割は編集でき、パートナーの時間割は閲覧専用（カレンダーの予定と同じ考え方）。
+// 旧バージョン(v2.5まで)は record.timetable に「ふたり共通の1つ」だけ持っていたため、
+// まだ自分用/相手用が保存されていない間は、その内容を両方の初期値として表示する。
+// （自分が一度でも編集・保存すると、自分用として独立して保存される。旧データ自体は書き換えない）
+// 端末内のみ保存だった頃の旧キー。初回のみ読み取り、以後は使用しない。
 const TIMETABLE_LEGACY_STORAGE_KEY = 'futari-calendar:timetable:v1';
 const TIMETABLE_DAYS = [
   { code: 'mon', label: '月' },
@@ -2261,35 +2287,39 @@ const TIMETABLE_DAYS = [
   { code: 'fri', label: '金' },
 ];
 const TIMETABLE_PERIODS = [1, 2, 3, 4];
-let timetableData = {};
+let timetableData = {};        // 自分の時間割
+let partnerTimetableData = {}; // パートナーの時間割（閲覧専用）
+let viewingTimetableWhose = 'mine'; // 'mine' or 'partner'：時間割シートでどちらを表示しているか
 let editingTimetableSlot = null; // 例: 'mon-1'
+
+function cloneJson(obj) {
+  return JSON.parse(JSON.stringify(obj || {}));
+}
 
 // record: 直前にjsonbinReadで取得済みのBin全体データ（loadAllEventListsから渡される）
 async function loadTimetable(record) {
-  const serverTimetable = record && record.timetable ? record.timetable : {};
+  const timetables = (record && record.timetables) || {};
+  let legacyShared = (record && record.timetable) || {}; // v2.5以前の「ふたり共通」の時間割
 
-  if (Object.keys(serverTimetable).length === 0) {
-    // サーバー側にまだ時間割が無い場合、旧バージョンの端末内データが残っていれば
-    // 一度だけそれをアップロードして引き継ぐ（以降はJSONBin側が正になる）
-    let legacyData = {};
+  // 端末内のみ保存だった頃のデータが残っていて、サーバー側に何も無い場合は、それを旧データ扱いで引き継ぐ
+  if (Object.keys(legacyShared).length === 0 && timetables[myName] === undefined) {
     try {
       const val = localStorage.getItem(TIMETABLE_LEGACY_STORAGE_KEY);
-      legacyData = val ? JSON.parse(val) : {};
-    } catch (e) {
-      legacyData = {};
-    }
-    if (Object.keys(legacyData).length > 0) {
-      timetableData = legacyData;
-      await saveTimetableToServer();
-      clearLegacyTimetableStorage();
-      return;
-    }
+      const local = val ? JSON.parse(val) : {};
+      if (Object.keys(local).length > 0) {
+        legacyShared = local;
+        timetableData = cloneJson(local);
+        partnerTimetableData = cloneJson(timetables[partnerName] !== undefined ? timetables[partnerName] : {});
+        await saveTimetableToServer(); // 自分用として保存し直す
+        clearLegacyTimetableStorage();
+        return;
+      }
+    } catch (e) {}
   }
 
-  timetableData = serverTimetable;
+  timetableData = cloneJson(timetables[myName] !== undefined ? timetables[myName] : legacyShared);
+  partnerTimetableData = cloneJson(timetables[partnerName] !== undefined ? timetables[partnerName] : legacyShared);
   // サーバー側と同期が取れたら、端末内の旧データは役目を終えているので消しておく。
-  // これを残したままだと、後で時間割リセットをした際に「サーバーが空 → 旧データを移行」の
-  // 判定が再び働いてしまい、消したはずのデータが復活してしまう。
   clearLegacyTimetableStorage();
 }
 
@@ -2299,14 +2329,16 @@ function clearLegacyTimetableStorage() {
   } catch (e) {}
 }
 
-// 保存前に最新のBinデータを取得し、timetable部分だけ更新してから丸ごと書き戻す
+// 保存前に最新のBinデータを取得し、自分の時間割だけ差し替えてから丸ごと書き戻す
+// （パートナーの時間割や予定を消さないため、record全体を引き継ぐ）
 async function saveTimetableToServer() {
   const statusEl = document.getElementById('syncStatus');
   try {
     const record = await jsonbinRead(pairCode);
-    const members = record.members || {};
-    await jsonbinUpdate(pairCode, { members, shared: record.shared || [], timetable: timetableData });
-    statusEl.textContent = '時間割を保存しました（パートナーと共有されます）';
+    const timetables = record.timetables || {};
+    timetables[myName] = timetableData;
+    await jsonbinUpdate(pairCode, { ...record, members: record.members || {}, shared: record.shared || [], timetables });
+    statusEl.textContent = '時間割を保存しました（パートナーに反映されます）';
     setTimeout(() => { statusEl.textContent = ''; }, 2000);
   } catch (e) {
     statusEl.textContent = '時間割の保存に失敗しました。もう一度お試しください';
@@ -2314,6 +2346,14 @@ async function saveTimetableToServer() {
 }
 
 function renderTimetableGrid() {
+  const isMine = viewingTimetableWhose === 'mine';
+  const data = isMine ? timetableData : partnerTimetableData;
+
+  document.getElementById('ttTabMine').classList.toggle('selected', isMine);
+  document.getElementById('ttTabPartner').classList.toggle('selected', !isMine);
+  // リセットは自分の時間割だけ。パートナーの時間割を見ている間は隠す。
+  document.getElementById('timetableResetBtn').style.display = isMine ? 'block' : 'none';
+
   const grid = document.getElementById('timetableGrid');
   grid.innerHTML = '';
 
@@ -2333,28 +2373,38 @@ function renderTimetableGrid() {
 
     TIMETABLE_DAYS.forEach(day => {
       const slotKey = `${day.code}-${period}`;
-      const slot = timetableData[slotKey];
+      const slot = data[slotKey];
       const cell = document.createElement('div');
-      cell.className = 'timetable-cell';
+      cell.className = 'timetable-cell' + (isMine ? '' : ' readonly');
       if (slot && slot.subject) {
         cell.innerHTML = `<div class="timetable-subject">${escapeHtml(slot.subject)}</div>`
           + (slot.teacher ? `<div class="timetable-sub">${escapeHtml(slot.teacher)}</div>` : '')
           + (slot.room ? `<div class="timetable-sub">${escapeHtml(slot.room)}</div>` : '');
       } else {
-        cell.innerHTML = '<div class="timetable-empty">＋</div>';
+        cell.innerHTML = `<div class="timetable-empty">${isMine ? '＋' : ''}</div>`;
       }
-      cell.addEventListener('click', () => openTimetableCellEditor(slotKey, day.label, period));
+      if (isMine) {
+        cell.addEventListener('click', () => openTimetableCellEditor(slotKey, day.label, period));
+      }
       grid.appendChild(cell);
     });
   });
 }
 
+function switchTimetableTab(who) {
+  viewingTimetableWhose = who;
+  renderTimetableGrid();
+}
+
 function openTimetableOverlay() {
+  // カレンダーで今見ているタブ（自分／パートナー）に合わせて開く
+  viewingTimetableWhose = viewingWhose;
   renderTimetableGrid();
   document.getElementById('timetableOverlay').classList.add('open');
 }
 
 function openTimetableCellEditor(slotKey, dayLabel, period) {
+  if (viewingTimetableWhose !== 'mine') return; // パートナーの時間割は閲覧専用
   editingTimetableSlot = slotKey;
   const slot = timetableData[slotKey] || {};
   document.getElementById('timetableCellTitle').textContent = `${dayLabel}曜 ${period}限`;
@@ -2366,8 +2416,11 @@ function openTimetableCellEditor(slotKey, dayLabel, period) {
 }
 
 function closeTimetableCellEditor() {
+  // 入力欄にフォーカスが残っているとキーボードが開いたままで、画面がずれる原因になる
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   document.getElementById('timetableCellOverlay').classList.remove('open');
   editingTimetableSlot = null;
+  resetViewportScroll();
 }
 
 async function saveTimetableCell() {
@@ -2395,7 +2448,7 @@ async function deleteTimetableCell() {
 }
 
 async function resetTimetable() {
-  if (!confirm('時間割の内容を全て消しますか？（ふたり共有の時間割です）カレンダーの予定は消えません。この操作は取り消せません。')) return;
+  if (!confirm('あなたの時間割の内容を全て消しますか？（パートナーの時間割とカレンダーの予定は消えません）この操作は取り消せません。')) return;
   timetableData = {};
   renderTimetableGrid();
   queueSave(saveTimetableToServer);
@@ -2633,8 +2686,9 @@ const saveWhoamiGuarded = guardBusy(saveWhoami, 'whoamiSaveBtn', '準備中…')
 
 // ===== 時間割のボタン =====
 document.getElementById('timetableFab').addEventListener('click', async () => {
-  // 最新の状態をパートナー側の変更も含めて取得してから開く
+  // 裏で保存中の内容があれば先に終わらせてから、最新の状態（パートナー側の変更も含む）を取得して開く
   try {
+    await saveChain;
     const record = await jsonbinRead(pairCode);
     await loadTimetable(record);
   } catch (e) {}
@@ -2643,6 +2697,8 @@ document.getElementById('timetableFab').addEventListener('click', async () => {
 document.getElementById('timetableCloseBtn').addEventListener('click', () => {
   document.getElementById('timetableOverlay').classList.remove('open');
 });
+document.getElementById('ttTabMine').addEventListener('click', () => switchTimetableTab('mine'));
+document.getElementById('ttTabPartner').addEventListener('click', () => switchTimetableTab('partner'));
 document.getElementById('timetableCellSaveBtn').addEventListener('click', saveTimetableCellGuarded);
 document.getElementById('timetableCellDeleteBtn').addEventListener('click', deleteTimetableCellGuarded);
 document.getElementById('timetableCellCancelBtn').addEventListener('click', closeTimetableCellEditor);
